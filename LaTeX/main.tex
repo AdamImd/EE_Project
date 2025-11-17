@@ -4,6 +4,8 @@
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{wrapfig,graphicx}
+\usepackage{algorithmic}
+\usepackage{amsmath}
 
 \title{Conditioning Robotic Action Prediction Using Pretrained Video Generation Models}
 \lhead{EE8520 - F25 - Project Proposal}
@@ -88,7 +90,49 @@ In our approach, task specification and planning are effectively offloaded to th
 
 Our dataset $\mathcal{D} = \{(o_{1:T^{(i)}}^{(i)}, a_{1:T^{(i)}}^{(i)})\}_{i=1}^N$ consists of full trajectories of observations and actions, where $T^{(i)}$ is the length of trajectory $i$. From this dataset, the model learns to predict the next $K$ actions given the current observation and goal embedding.
 
+
+\section{Updates}
+
+\begin{figure}[h]
+    \centering
+    \begin{minipage}{0.95\linewidth}
+        \begin{algorithmic}[1]
+            \STATE \textbf{Input:} Current observation $o_t$, text command $c$, proprioception $p_t$
+            \STATE \textbf{Output:} Action sequence $a_{t:t+K}$
+            
+            \STATE \textcolor{blue}{\textbf{// Step 1: Video Prediction}}
+            \STATE $\hat{o}_{t+1:t+H} \leftarrow f_{\phi}^{\mathrm{video}}(o_t, c)$ \COMMENT{Generate future frames}
+            \STATE $g_{t+1:t+H} \leftarrow \text{Encode}(\hat{o}_{t+1:t+H})$ \COMMENT{Encode goal images}
+            
+            \STATE \textcolor{red}{\textbf{// Step 2: Diffusion Policy with Cross-Attention Conditioning}}
+            \STATE $a^{(0)}_{t:t+K} \sim \mathcal{N}(0, I)$ \COMMENT{Initialize action sequence as noise}
+            \STATE $o_t^{\text{enc}} \leftarrow \text{Encode}(o_t)$ \COMMENT{Encode current observation}
+            \STATE $p_t^{\text{enc}} \leftarrow \text{MLP}(p_t)$ \COMMENT{Encode proprioception}
+            
+            \FOR{diffusion step $\tau = T, T-1, \ldots, 1$}
+                \STATE \textcolor{purple}{\textbf{// Cross-Attention over Generated Images}}
+                \STATE $\text{attn\_out} \leftarrow \text{CrossAttention}($ 
+                \STATE \quad \quad $\text{query}=o_t^{\text{enc}}, \text{key}=g_{t+1:t+H}, \text{value}=g_{t+1:t+H})$
+                
+                \STATE \textcolor{purple}{\textbf{// Construct Conditioning Vector}}
+                \STATE $\text{cond} \leftarrow \text{Concat}(o_t^{\text{enc}}, \text{attn\_out}, p_t^{\text{enc}})$
+                
+                \STATE \textcolor{purple}{\textbf{// 1D Convolution over Action Horizon}}
+                \STATE $\epsilon_\theta \leftarrow \text{ConditionalUNet1D}(a^{(\tau)}_{t:t+K}, \tau, \text{cond})$
+                
+                \STATE \textcolor{purple}{\textbf{// Denoising Step}}
+                \STATE $a^{(\tau-1)}_{t:t+K} \leftarrow \text{Scheduler.step}(\epsilon_\theta, \tau, a^{(\tau)}_{t:t+K})$
+            \ENDFOR
+            
+            \STATE \textbf{return} $a^{(0)}_{t:t+K}$ \COMMENT{Final denoised action sequence}
+        \end{algorithmic}
+    \end{minipage}
+    \caption{Two-step algorithm: (1) Video prediction generates future goal images, (2) Diffusion policy uses cross-attention to condition on these images, transforming noise into coherent action sequences through iterative denoising over the action horizon using 1D convolutions.}
+    \label{fig:algorithm}
+\end{figure}
+
 \bibliography{refs}
-\bibliographystyle{refs}    
+% \bibliographystyle{refs}    
+\bibliographystyle{plain}
 
 \end{document}
