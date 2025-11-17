@@ -193,3 +193,124 @@ class MultiImageObsEncoder(ModuleAttrMixin):
         example_output = self.forward(example_obs_dict)
         output_shape = example_output.shape[1:]
         return output_shape
+    
+
+
+
+
+# Adam: Video Prediction Conditioning
+class MultiImageObsEncoder_Video(MultiImageObsEncoder):
+    def __init__(self,
+            shape_meta: dict,
+            rgb_model: Union[nn.Module, Dict[str,nn.Module]],
+            resize_shape: Union[Tuple[int,int], Dict[str,tuple], None]=None,
+            crop_shape: Union[Tuple[int,int], Dict[str,tuple], None]=None,
+            random_crop: bool=True,
+            # replace BatchNorm with GroupNorm
+            use_group_norm: bool=False,
+            # use single rgb model for all rgb inputs
+            share_rgb_model: bool=False,
+            # renormalize rgb input with imagenet normalization
+            # assuming input in [0,1]
+            imagenet_norm: bool=False,
+            # Cross-attention parameters for future frames
+            attention_heads: int=8,
+            attention_dim: int=256
+        ):
+        """
+        Args:
+            Same as MultiImageObsEncoder plus:
+            attention_heads: Number of attention heads for cross-attention
+            attention_dim: Dimension for attention computation
+        """
+        super().__init__(
+            shape_meta=shape_meta,
+            rgb_model=rgb_model,
+            resize_shape=resize_shape,
+            crop_shape=crop_shape,
+            random_crop=random_crop,
+            use_group_norm=use_group_norm,
+            share_rgb_model=share_rgb_model,
+            imagenet_norm=imagenet_norm
+        )
+        
+        # Add cross-attention module for future frame conditioning
+        self.attention_heads = attention_heads
+        self.attention_dim = attention_dim
+        
+        # Cross-attention layer: current obs as query, future frames as key/value
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=attention_dim,
+            num_heads=attention_heads,
+            batch_first=True
+        )
+        
+        # Project features to attention dimension
+        # We'll compute this after knowing the actual feature dimensions
+        self.obs_proj = None
+        self.future_proj = None
+        self.output_proj = None
+
+
+    def forward(self, obs_dict, future_frames=None):
+        """
+        Args:
+            obs_dict: Current observation dictionary
+            future_frames: (B, H, C, img_H, img_W) tensor of future frames where H is horizon
+        """
+        # Encode current observation using parent class
+        current_obs_features = super().forward(obs_dict)  # (B, D)
+        
+        # Handle future frame conditioning if provided
+        if future_frames is not None:
+            B, H, C, img_H, img_W = future_frames.shape
+            
+            # Initialize projection layers if first time
+            if self.obs_proj is None:
+                obs_dim = current_obs_features.shape[-1]
+                self.obs_proj = nn.Linear(obs_dim, self.attention_dim).to(current_obs_features.device)
+                self.future_proj = nn.Linear(obs_dim, self.attention_dim).to(current_obs_features.device)
+                self.output_proj = nn.Linear(self.attention_dim, obs_dim).to(current_obs_features.device)
+            
+            # Encode future frames using parent class
+            future_features = []
+            primary_rgb_key = self.rgb_keys[0] if self.rgb_keys else None
+            
+            for h in range(H):
+                # Create observation dict for this future frame
+                future_obs_dict = {}
+                
+                # Use the primary RGB key for future frames
+                if primary_rgb_key:
+                    future_obs_dict[primary_rgb_key] = future_frames[:, h]  # (B, C, img_H, img_W)
+                
+                # Encode this future frame using parent's forward method
+                frame_feature = super().forward(future_obs_dict)  # (B, D)
+                future_features.append(frame_feature)
+            
+            # Stack future features: (B, H, D)
+            future_features = torch.stack(future_features, dim=1)
+            
+            # Project to attention dimensions
+            current_projected = self.obs_proj(current_obs_features).unsqueeze(1)  # (B, 1, attention_dim)
+            future_projected = self.future_proj(future_features)  # (B, H, attention_dim)
+            
+            # Cross-attention: current obs as query, future frames as key/value
+            attn_out, _ = self.cross_attention(
+                query=current_projected,
+                key=future_projected,
+                value=future_projected
+            )  # (B, 1, attention_dim)
+            
+            # Project back to original dimension
+            attn_out = self.output_proj(attn_out.squeeze(1))  # (B, obs_dim)
+            
+            # Concatenate attention output with original features
+            result = torch.cat([current_obs_features, attn_out], dim=-1)
+        else:
+            # No future conditioning, just return current observation features
+            result = current_obs_features
+        
+        return result
+    
+
