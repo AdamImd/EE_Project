@@ -11,7 +11,8 @@
 *.bbl
 *.blg
 *.pdf
-
+# Not ./LaTeX/Figure.pdf
+!LaTeX/Figure.pdf
 
 # Video Files
 *.mp4
