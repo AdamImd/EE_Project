@@ -23,7 +23,7 @@ Video Embodiment\\
 \maketitle
 
 \begin{abstract}
-    We propose a novel, zero-shot approach to robotic manipulation that leverages pretrained video generation models to predict intermediate and goal states, for conditioning a low-level policy. We demonstrate the effectiveness of our method on a variety of manipulation tasks, showing performance on tasks never seen during training.
+    We propose a novel, zero-shot approach to robotic manipulation that leverages pretrained video generation models to predict intermediate and goal states, for conditioning a low-level action prediction model. We demonstrate the effectiveness of our method on a variety of manipulation tasks, showing performance on tasks never seen during training.
 \end{abstract}
 
 \section{Introduction}
@@ -32,7 +32,7 @@ Robotics has witnessed significant advancements in recent years due to the integ
 Despite these advancements, the robotics community still faces challenges in effectively using these models for real-world robotic control and decision-making tasks, especially in dynamic and unstructured environments. The specific knowledge required to understand 3D space and the physical interactions of the robot with its environment is referred to as embodied knowledge. Embodied knowledge varies between robots and environments, making it difficult use  generalized models as they lack this crucial context.
 Another downside of these large models is that they often require significant computational resources and computational time, which can be prohibitive for real-time robotic applications. 
 
-We propose a novel approach that leverages pretrained video generation models to condition robotic action prediction. By utilizing the large scale datasets and powerful prediction capabilities of these models, we can predict intermediate and goal images that guide the robot's actions, enabling our lower level policy to use a better aligned goal representation than text. 
+We propose a novel approach that leverages pretrained video generation models to condition robotic action prediction. By utilizing the large scale datasets and powerful prediction capabilities of these models, we can predict intermediate and goal images that guide the robot's actions, enabling our lower level action prediction model to use a better aligned goal representation than text. In this work, we use the term ``policy'' to mean a learned model that maps past observations and actions to the next action the robot should take.
 
 \section{Related Works}
 Recent works have explored the use of video prediction for robotic control, directly extracting poses or trajectory information from predicted future frames~\citep{Li2025NovaFlowZM,patel2025roboticmanipulationimitatinggenerated}, by predicting depth frames from each predicted frame, providing a dense 3D representation of the scene.
@@ -58,6 +58,10 @@ We will build upon this line of work by using the same video prediction model \c
 
 We propose a hierarchical approach that integrates video prediction with diffusion-based policy learning. We take advantage of the complementary strengths of both paradigms to address the challenges of long-horizon tasks, with the reactive lower-level policy handling the complexities of real-time control.
 
+Most existing robotics models do not explicitly indicate when a task is complete, often relying on a fixed time limit or a set number of actions. To address this, I will consider including a time embedding to help the model understand the sequence and timing of goals. This work represents a new approach to conditioning diffusion policies, rather than an implementation trick, and is distinct from my prior research, which has focused on hardware design and sensing rather than generative models.
+
+Our project is centered on the generative action model rather than on training a new video generator. The pretrained video diffusion model is treated as a high-level planner that provides future visual context, while the main contribution of this work is a diffusion-based action generation model. This model operates over a one-dimensional sequence of action vectors (the robot trajectory) and is conditioned on predicted future images, analogous to how language models predict the next word given a sentence. This framing places the core of the work  within generative modeling for control, which aligns with the scope of EE8520.
+
 \subsection{High-Level Video Prediction}
 
 We utilize the video prediction model from \citet{wan2025} to generate our sequence of future frames, which will act as the high-level plan for the robot to follow. The video prediction model $F_{video}$ takes as input the current visual observation $v_t$ and a text command $c_t$, outputting a sequence of predicted future frames $\hat{V}_{t+1:t+H} = \{\hat{v}_{t+1}, \hat{v}_{t+2}, ..., \hat{v}_{t+H}\}$, where $H$ is the prediction horizon. An example of the predicted frames is shown in Figure~\ref{fig:overview} for the text prompt: "Pick up the red block".
@@ -72,6 +76,8 @@ The low-level policy $F_{action}(\tau)$ will generate a sequence of actions $\ha
 
 The Diffusion Policy starts with $\hat{A}_{\tau}$ as random noise and iteratively denoises given the conditioning $\dot{G}$ and the current observation embedding, gradually refining the action sequence to produce a coherent plan that makes progress towards the specified goal.
 
+Our approach is novel in that, while prior works use predicted video frames to create goals for denoising actions or directly extract robot poses from video, these methods often lack the ability to react to changes in the environment or rely on single goal images. In contrast, we create a series of goal images from a predicted video and condition the action diffusion model on these multiple future frames. This enables richer, temporally-aware guidance for action generation. We hypothesize that conditioning diffusion on future goal images will outperform conditioning on text embeddings of the task description. To further improve flexibility, we will explore using attention mechanisms to weight which goal image is most relevant at each step. To our knowledge, conditioning diffusion using multiple future goal images in this way has not been previously explored.
+
 \subsection{Training}
 
 We use the pretrained video model without fine-tuning, as it is extremely computationally intensive to train. We produce one video per command, with an average generation time over 20 minutes on a single NVIDIA A5500 GPU. Because of the high computational cost, we only generate videos during rollout, instead training the diffusion policy on offline data.
@@ -79,6 +85,8 @@ We use the pretrained video model without fine-tuning, as it is extremely comput
 To collect data for the Diffusion Policy, we teleoperate the robot to perform exploratory actions. There is no need to use labeled data, as the diffusion model can learn from the raw state-action trajectories in an autoregressive manner. For this reason, we do not require expensive annotation or task-specific training, preserving the generality of our approach.
 
 We aim to collect a dataset of 2 hours of robot teleoperation data in the tabletop setting with diverse objects and configurations, capturing a wide range of manipulation behaviors.
+
+In our approach, task specification and planning are effectively offloaded to the video model, which generates future goal images for the robot to pursue. While the training data is described as "unlabeled," it is analogous to NLP datasets, where the model learns from sequences of actions chosen by a human, without explicit class or label annotations. The diffusion model is trained on these raw state-action trajectories, and we aim to demonstrate that goal-conditioned planning can be effective even with limited data. Evaluation will focus on the model's ability to generalize to new tasks and objects it has not encountered during training.
 
 Our dataset $\mathcal{D} = \{(\tau_i, a_i)\}_{i=1}^N$ consists of action-observation pairs, where the model learns to predict the next $K$ actions given the current observation and goal embedding.
 
